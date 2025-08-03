@@ -1,0 +1,35 @@
+
+# Файл .gitignore
+# Файлы окружения
+.env
+.env.*
+# Исключение: разрешаем .env.example
+!.env.example
+
+# Файлы Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Логи
+*.log
+*.cache
+
+# Виртуальные окружения
+new_venv/
+working_env/
+venv/
+.venv/
+env/
+
+# Операционные системы
+.DS_Store
+
+# Редакторы
+.idea/
+.vscode/
+
+# Модели (если не хотите коммитить)
+models/all-MiniLM-L6-v2/
+
