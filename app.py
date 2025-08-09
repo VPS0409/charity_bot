@@ -1,30 +1,59 @@
-# Файл app.py
+# app.py
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+from dotenv import load_dotenv
 
+# Загрузка переменных окружения ПЕРВЫМ делом
+load_dotenv()
+
+# Теперь импортируем config, который будет использовать загруженные переменные
+import config
+
+# Остальные импорты
+os.environ["TOKENIZERS_PARALLELISM"] = "false" if not config.DEBUG else "true"
 from flask import Flask, request, jsonify
 from database import Database
 from embedding_model import EmbeddingModel
-import config
 from utils import array_to_blob
 from datetime import datetime
 import logging
 import signal
 import sys
 
+# ... остальной код без изменений ...
+
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Диагностика
+logger.info(f"Текущая рабочая директория: {os.getcwd()}")
+logger.info(f"Абсолютный путь к модели: {os.path.abspath(config.MODEL_PATH)}")
+logger.info(f"Существует ли директория: {os.path.exists(config.MODEL_PATH)}")
+
+if os.path.exists(config.MODEL_PATH):
+    logger.info(f"Файлы в директории: {os.listdir(config.MODEL_PATH)}")
+else:
+    logger.error("Директория не существует!")
+
 app = Flask(__name__)
 
 # Инициализация базы данных и модели
+logger.info("Инициализация подключения к БД...")
 db = Database(
     config.DB_HOST, 
     config.DB_USER, 
     config.DB_PASSWORD, 
     config.DB_NAME
 )
+
+# Проверка подключения при запуске
+logger.info("Проверка подключения к БД...")
+if db.connect():
+    logger.info("Проверочное подключение к БД успешно")
+    db.disconnect()
+else:
+    logger.error("Не удалось подключиться к БД при запуске!")
+
 embedder = EmbeddingModel(config.MODEL_PATH)
 
 # Обработчики для корректного завершения работы
@@ -139,14 +168,67 @@ def handle_question():
             "details": str(ex)
         }), 500
 
+# Новый эндпоинт для тестирования схожести
+@app.route('/test_similarity', methods=['GET'])
+def test_similarity():
+    """Тестовый эндпоинт для проверки работы системы"""
+    try:
+        test_question = "Кто может получить консультацию и сколько раз"
+        
+        # Нормализуем вопрос
+        normalized = embedder.normalize_text(test_question)
+        logger.info(f"Тестовый вопрос: '{test_question}'")
+        logger.info(f"Нормализованный тестовый вопрос: '{normalized}'")
+        
+        # Рассчитываем эмбеддинг
+        embedding = embedder.get_embedding(normalized)
+        logger.info(f"Эмбеддинг рассчитан, размер: {len(embedding)}")
+        
+        # Ищем в базе
+        result = db.find_closest_question(embedding)
+        
+        if not result:
+            return jsonify({"error": "Question not found in database"}), 404
+            
+        q_id, similarity, intent = result
+        
+        # Получаем текст вопроса из базы
+        if not db.connect():
+            return jsonify({"error": "Database connection failed"}), 500
+            
+        with db.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT question_text FROM questions WHERE id = %s",
+                (q_id,)
+            )
+            db_question = cursor.fetchone()
+            if not db_question:
+                return jsonify({"error": "Database record not found"}), 404
+                
+            db_question_text = db_question['question_text']
+        
+        return jsonify({
+            "input_question": test_question,
+            "db_question": db_question_text,
+            "normalized_input": normalized,
+            "similarity": similarity,
+            "similarity_threshold": config.SIMILARITY_THRESHOLD
+        })
+        
+    except Exception as e:
+        logger.exception("Ошибка в тестовом эндпоинте")
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     from werkzeug.serving import run_simple
-    logger.info("Запуск сервера через run_simple...")
+    logger.info(f"Запуск сервера на порту {config.PORT}...")
+    logger.info(f"Режим отладки: {'ВКЛ' if config.DEBUG else 'ВЫКЛ'}")
+    
     run_simple(
         hostname='0.0.0.0', 
         port=config.PORT, 
         application=app,
-        use_reloader=False,
-        use_debugger=True,
+        use_reloader=config.DEBUG,
+        use_debugger=config.DEBUG,
         threaded=True
     )

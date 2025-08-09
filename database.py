@@ -1,120 +1,131 @@
-# Файл database.py
-# Функции работы с MySQL
+# database.py
 
-import mysql.connector
-import numpy as np
-from utils import blob_to_array
+import pymysql
 import logging
+import numpy as np
+import config
+from utils import blob_to_array
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self, host, user, password, database):
-        self.config = {
-            'host': host,
-            'user': user,
-            'password': password,
-            'database': database
-        }
+        self.host = host
+        self.user = user
+        self.password = password
+        self.database = database
         self.connection = None
-        
-    def connect(self):
-        try:
-            if not self.connection or not self.connection.is_connected():
-                self.connection = mysql.connector.connect(**self.config)
-                logger.info("Подключение к БД успешно установлено")
-            return True
-        except mysql.connector.Error as e:
-            logger.error(f"Ошибка подключения к БД: {e}")
-            return False
-            
-    def disconnect(self):
-        if self.connection and self.connection.is_connected():
-            try:
-                # Закрываем все открытые курсоры
-                while self.connection.unread_result:
-                    self.connection.cmd_query_reset()
-                
-                self.connection.close()
-                logger.info("Соединение с БД закрыто")
-            except Exception as e:
-                logger.error(f"Ошибка при закрытии соединения: {str(e)}")
     
-    def execute_query(self, query, params=None):
+    def connect(self):
+        logger.info(f"Попытка подключения к БД: {self.user}@{self.host}/{self.database}")
+        try:
+            self.connection = pymysql.connect(
+                host=self.host,
+                user=self.user,
+                password=self.password,
+                database=self.database,
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor
+            )
+            logger.info("Подключение к БД успешно установлено")
+            return True
+        except pymysql.Error as e:
+            error_code = e.args[0] if e.args else 'N/A'
+            error_msg = e.args[1] if len(e.args) > 1 else str(e)
+            logger.error(f"Ошибка подключения к БД (код {error_code}): {error_msg}")
+            return False
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при подключении: {e}")
+            return False
+    
+    def disconnect(self):
+        if self.connection:
+            try:
+                self.connection.close()
+                logger.info("Отключено от БД")
+            except Exception as e:
+                logger.error(f"Ошибка при отключении: {e}")
+        self.connection = None
+    
+    def get_cursor(self):
+        """Создает и возвращает курсор с обработкой ошибок"""
+        if not self.connection or not self.connection.open:
+            if not self.connect():
+                return None
+            
+        try:
+            return self.connection.cursor()
+        except pymysql.Error as e:
+            logger.error(f"Ошибка создания курсора: {e}")
+            return None
+    
+    def execute_query(self, query, params=None, commit=False):
         """Выполняет SQL-запрос и возвращает результат"""
-        if not self.connect():
+        cursor = self.get_cursor()
+        if not cursor:
             return None
             
         try:
-            cursor = self.connection.cursor(buffered=True)
             cursor.execute(query, params or ())
-            self.connection.commit()
+            if commit:
+                self.connection.commit()
             return cursor
-        except mysql.connector.Error as e:
+        except pymysql.Error as e:
             logger.error(f"Ошибка выполнения запроса: {str(e)}")
             return None
     
-    def question_exists(self, question_text):
-        """Проверяет, существует ли уже такой вопрос в базе"""
-        cursor = self.execute_query(
-            "SELECT COUNT(*) FROM questions WHERE question_text = %s",
-            (question_text,)
-        )
-        if cursor:
-            result = cursor.fetchone()
-            cursor.close()
-            return result[0] > 0 if result else False
-        return False
-    
     def find_closest_question(self, embedding):
         """Ищем ближайший вопрос в базе данных"""
-        if not self.connect():
+        cursor = self.execute_query("SELECT id, embedding, intent FROM questions")
+        if not cursor:
             logger.error("Нет подключения к БД для поиска вопроса")
             return None
-            # return closest_id, 1 - min_dist, closest_intent 
             
         try:
-            cursor = self.connection.cursor(buffered=True)
-            cursor.execute("SELECT COUNT(*) FROM questions")
-            count = cursor.fetchone()[0]
-            logger.info(f"Найдено вопросов в базе: {count}")
-            cursor.execute("SELECT id, embedding, intent FROM questions")
             min_dist = float('inf')
             closest_id = None
             closest_intent = None
             
-            # Получаем все результаты сразу
-            rows = cursor.fetchall()
-            for (q_id, emb_blob, intent) in rows:
-                # Преобразуем BLOB в массив numpy
-                db_embedding = blob_to_array(emb_blob)
+            for row in cursor:
+                q_id = row['id']
+                emb_blob = row['embedding']
+                intent = row['intent']
                 
-                # Рассчитываем косинусное расстояние
-                dist = self.cosine_distance(embedding, db_embedding)
-                
-                if dist < min_dist:
-                    min_dist = dist
-                    closest_id = q_id
-                    closest_intent = intent
+                # Пропускаем пустые значения
+                if emb_blob is None:
+                    logger.warning(f"Пустой BLOB для вопроса id={q_id}")
+                    continue
                     
-            cursor.close()
+                try:
+                    # Преобразуем BLOB в массив numpy
+                    db_embedding = blob_to_array(emb_blob)
+                    
+                    # Рассчитываем косинусное расстояние
+                    dist = self.cosine_distance(embedding, db_embedding)
+                    
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_id = q_id
+                        closest_intent = intent
+                except Exception as e:
+                    logger.error(f"Ошибка обработки эмбеддинга для вопроса id={q_id}: {str(e)}")
+                    continue
+                    
             if closest_id is None:
                 logger.info("Не найдено подходящих вопросов")
                 return None
             
-            if closest_id:
-                logger.info(f"Найден ближайший вопрос: id={closest_id}, distance={min_dist:.4f}, intent={closest_intent}")
-                similarity = 1 - min_dist
-                return closest_id, similarity, closest_intent
-
-                
-            logger.info("Не найдено ни одного вопроса в базе")
-            return None
+            logger.info(f"Найден ближайший вопрос: id={closest_id}, distance={min_dist:.4f}, intent={closest_intent}")
+            similarity = 1 - min_dist
+            return closest_id, similarity, closest_intent
             
         except Exception as e:
-            logger.error(f"Ошибка при поиске ближайшего вопроса: {str(e)}")
+            logger.error(f"Общая ошибка при поиске ближайшего вопроса: {str(e)}")
             return None
-            
+        finally:
+            cursor.close()
+
     def cosine_distance(self, vec1, vec2):
         """Вычисляем косинусное расстояние между двумя векторами"""
         try:
@@ -134,27 +145,71 @@ class Database:
             return 1.0
     
     def get_question_answer(self, question_id):
+        """Получаем текст ответа из таблицы answers"""
         cursor = self.execute_query(
-        "SELECT a.answer_text FROM answers a JOIN questions q ON a.id = q.answer_id WHERE q.id = %s",
-        (question_id,)
-    )
-    
-        if cursor is None:
+            "SELECT a.answer_text "
+            "FROM questions q "
+            "JOIN answers a ON q.answer_id = a.id "
+            "WHERE q.id = %s",
+            (question_id,)
+        )
+        
+        if not cursor:
             logger.error("Ошибка выполнения запроса ответа")
             return None
             
         result = cursor.fetchone()
         cursor.close()
     
-        return result[0] if result else None
+        return result['answer_text'] if result else None
             
     def save_pending_question(self, original_question, normalized_question, embedding_blob):
         """Сохраняет неотвеченный вопрос в таблицу pending_questions"""
         cursor = self.execute_query(
-            "INSERT INTO pending_questions (original_question, normalized_question, embedding) VALUES (%s, %s, %s)",
-            (original_question, normalized_question, embedding_blob)
+            "INSERT INTO pending_questions (original_text, normalized_text, embedding) VALUES (%s, %s, %s)",
+            (original_question, normalized_question, embedding_blob),
+            commit=True
         )
         if cursor:
             cursor.close()
             return True
         return False
+    
+    def question_exists(self, question_text):
+        """Проверяет, существует ли уже такой вопрос в базе"""
+        cursor = self.execute_query(
+            "SELECT COUNT(*) AS cnt FROM questions WHERE question_text = %s",
+            (question_text,)
+        )
+        if cursor:
+            result = cursor.fetchone()
+            cursor.close()
+            return result['cnt'] > 0 if result else False
+        return False
+
+    def insert_answer(self, answer_text):
+        """Добавляет новый ответ в таблицу answers и возвращает его ID"""
+        cursor = self.execute_query(
+            "INSERT INTO answers (answer_text) VALUES (%s)",
+            (answer_text,),
+            commit=True
+        )
+        if cursor:
+            last_id = cursor.lastrowid
+            cursor.close()
+            return last_id
+        return None
+
+    def insert_question(self, question_text, answer_id, embedding, intent):
+        """Добавляет новый вопрос в таблицу questions"""
+        cursor = self.execute_query(
+            "INSERT INTO questions (question_text, answer_id, embedding, intent) VALUES (%s, %s, %s, %s)",
+            (question_text, answer_id, embedding, intent),
+            commit=True
+        )
+        if cursor:
+            cursor.close()
+            return True
+        return False
+    
+      

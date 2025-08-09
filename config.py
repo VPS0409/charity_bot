@@ -1,20 +1,22 @@
 # config.py
-
 import os
+import logging
 
-# Настройки БД
-DB_HOST = "localhost"
-DB_USER = "charity_user"
-DB_PASSWORD = "VPScharity0409$"
-DB_NAME = "charity_bot_db"
+logger = logging.getLogger(__name__)
 
-# Настройки порта
-PORT = 5050
+logger.info(f"DB_USER из окружения: '{os.getenv('DB_USER', '')}'")
+logger.info(f"DB_PASSWORD из окружения: '{os.getenv('DB_PASSWORD', '')}'")
 
-# Модель эмбеддингов
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "models", "all-MiniLM-L6-v2")
-# MODEL_PATH = "cointegrated/LaBSE-en-ru"  # Легкая кросс-язычная модель
+# ... остальные настройки ...
 
-# Порог схожести вопросов
-SIMILARITY_THRESHOLD = 0.85
+# Настройки базы данных
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_USER = os.getenv('DB_USER', '')
+DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+DB_NAME = os.getenv('DB_NAME', 'charity_bot_db')
+
+# Настройки приложения
+PORT = int(os.getenv('PORT', 5050))
+MODEL_PATH = os.getenv('MODEL_PATH', 'models/all-MiniLM-L6-v2')
+SIMILARITY_THRESHOLD = float(os.getenv('SIMILARITY_THRESHOLD', 0.85))
+DEBUG = os.getenv('DEBUG', 'true').lower() == 'true'

@@ -1,6 +1,3 @@
-# Файл load_initial_data.py
-# Скрипт загрузки CSV в БД
-
 import sys
 import os
 import argparse
@@ -8,14 +5,18 @@ import csv
 import logging
 import traceback
 import re
+from dotenv import load_dotenv
+
+# Загрузка переменных окружения перед импортом config
+load_dotenv()
 
 # Добавляем корневую директорию проекта в путь Python
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+import config
 from database import Database
 from embedding_model import EmbeddingModel
 from utils import array_to_blob
-import config
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -103,8 +104,11 @@ def load_data(csv_file, has_header=False):
                         skipped_count += 1
                         continue
                     
+                    # Нормализуем вопрос
+                    normalized_question = embedder.normalize_text(question)
+                    
                     # Рассчитываем эмбеддинг
-                    embedding = embedder.get_embedding(question)
+                    embedding = embedder.get_embedding(normalized_question)
                     blob = array_to_blob(embedding)
                     
                     # Добавляем ответ и получаем его ID
