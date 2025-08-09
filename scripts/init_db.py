@@ -1,50 +1,78 @@
-# init_db.py
-import pymysql
-import os
-import logging
+# scripts/init_db.py
 import sys
-from dotenv import load_dotenv  # Импортируем загрузчик для .env
+import os
+import pymysql
+import logging
 
-# Загружаем переменные окружения из .env файла
-load_dotenv()
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Настройка логирования
+import config
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def init_database():
-    connection = None
     try:
-        # Получаем значения из переменных окружения
-        DB_HOST = os.getenv('DB_HOST', 'localhost')
-        DB_USER = os.getenv('DB_USER', 'root')
-        DB_PASSWORD = os.getenv('DB_PASSWORD', '')
-        DB_NAME = os.getenv('DB_NAME', 'charity_bot_db')
-        
-        logger.info(f"Попытка подключения к MySQL: user={DB_USER}, host={DB_HOST}")
-        
         connection = pymysql.connect(
-            host=DB_HOST,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            charset='utf8mb4',
-            cursorclass=pymysql.cursors.DictCursor
+            host=config.DB_HOST,
+            user=config.DB_USER,
+            password=config.DB_PASSWORD,
+            charset='utf8mb4'
         )
         
         with connection.cursor() as cursor:
-            # Создание базы данных
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{DB_NAME}`")
-            logger.info(f"База данных '{DB_NAME}' создана или уже существует")
+            # Создаем базу данных, если не существует
+            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {config.DB_NAME}")
+            logger.info(f"База данных {config.DB_NAME} создана или уже существует")
+            
+            # Используем созданную базу данных
+            cursor.execute(f"USE {config.DB_NAME}")
+            
+            # Создаем таблицы
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS answers (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    answer_text TEXT NOT NULL
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS questions (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    question_text TEXT NOT NULL,
+                    answer_id INT NOT NULL,
+                    embedding BLOB NOT NULL,
+                    intent VARCHAR(255) NOT NULL,
+                    FOREIGN KEY (answer_id) REFERENCES answers(id)
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pending_questions (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    original_text TEXT NOT NULL,
+                    normalized_text TEXT NOT NULL,
+                    embedding BLOB NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            logger.info("Таблицы успешно созданы")
         
-        logger.info("Инициализация БД успешно завершена")
+        connection.commit()
         return True
         
     except pymysql.Error as e:
-        logger.error(f"Ошибка инициализации БД: {e}")
+        logger.error(f"Ошибка инициализации базы данных: {str(e)}")
         return False
     finally:
         if connection:
             connection.close()
 
 if __name__ == "__main__":
-    init_database()
+    if init_database():
+        logger.info("✅ База данных успешно инициализирована")
+        sys.exit(0)
+    else:
+        logger.error("❌ Ошибка инициализации базы данных")
+        sys.exit(1)

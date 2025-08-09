@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  charity-bot:
+    build: .
+    ports:
+      - "5050:5050"
+    environment:
+      - DB_HOST=db
+      - DB_USER=root
+      - DB_PASSWORD=example
+      - DB_NAME=charity_bot_db
+    depends_on:
+      - db
+    volumes:
+      - ./models:/app/models
+      - ./base_qu_an:/app/base_qu_an
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: example
+      MYSQL_DATABASE: charity_bot_db
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+volumes:
+  mysql-data:
