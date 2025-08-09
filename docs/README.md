@@ -13,50 +13,50 @@ markdown
 ```bash
 git clone https://github.com/VPS0409/charity_bot.git
 cd charity_bot
-Создайте и активируйте виртуальное окружение:
 
+Создайте и активируйте виртуальное окружение:
 bash
 python -m venv .venv
 source .venv/bin/activate  # Linux/macOS
 .venv\Scripts\activate     # Windows
-Установите зависимости:
 
+Установите зависимости:
 bash
 pip install -r requirements.txt
-Загрузите модель:
 
+Загрузите модель:
 bash
 python download_model.py
-Инициализируйте базу данных:
 
+Инициализируйте базу данных:
 bash
 python scripts/init_db.py
-Загрузите данные:
 
+Загрузите данные:
 bash
 python scripts/load_data.py --file base_qu_an/qu_ans_1.csv --header
-Запустите сервер:
 
+Запустите сервер:
 bash
 python app.py
+
 Docker-установка
 Соберите образ:
-
 bash
 docker-compose build
-Запустите сервисы:
 
+Запустите сервисы:
 bash
 docker-compose up
 
 Проверка работы
-
 bash
 curl -X POST http://localhost:5050/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "Как получить помощь?"}'
 
   Использование
+  
 Проверка работы сервера
 bash
 curl http://localhost:5050
@@ -90,25 +90,23 @@ scripts/process_pending.py - обработка ожидающих вопрос�
 
 load_data.py
 Загружает данные из CSV-файла в базу.
-
 bash
 python scripts/load_data.py --file base_qu_an/qu_ans_1.csv --header
+
 add_question.py
 Добавляет один вопрос в базу данных.
-
 bash
 python scripts/add_question.py --question "Как стать волонтером?" --answer "Заполните форму на нашем сайте" --intent "volunteering"
+
 view_pending.py
 Просмотр необработанных вопросов.
-
 bash
 python scripts/view_pending.py
+
 process_pending.py
 Обработка неотвеченных вопросов.
-
 bash
 python scripts/process_pending.py --id 5 --answer "Ответ на вопрос" --intent "new_intent"
-text
 
 ### 9. Финальная структура проекта
 charity_bot/
