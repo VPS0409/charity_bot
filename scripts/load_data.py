@@ -1,5 +1,4 @@
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+# scripts/load_data.py
 import sys
 import os
 import argparse
@@ -9,7 +8,7 @@ import traceback
 import re
 from dotenv import load_dotenv
 
-# Загрузка переменных окружения перед импортом config
+# Загрузка переменных окружения
 load_dotenv()
 
 # Добавляем корневую директорию проекта в путь Python
@@ -24,25 +23,21 @@ from utils import array_to_blob
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def normalize_field(value):
+    """Нормализация и очистка полей"""
+    return value.strip().replace('\xa0', ' ').replace('"', '').replace("'", "")
+
 def is_header_row(row):
     """Определяет, является ли строка заголовком"""
-    if len(row) < 3:
-        return False
-        
-    # Проверяем, содержит ли строка только буквы (без цифр)
-    contains_only_alpha = all(
-        re.match(r'^[^\d]*$', field.strip(), re.IGNORECASE) 
-        for field in row[:3]
-    )
-    
-    # Проверяем наличие типичных слов заголовков
-    header_keywords = ['intent', 'question', 'answer', 'вопрос', 'ответ', 'намерение']
+    header_keywords = [
+        'questions_groups', 'standard_questions', 
+        'intent', 'question_variants', 'answers'
+    ]
     contains_keywords = any(
         any(keyword in field.lower() for keyword in header_keywords)
-        for field in row[:3]
+        for field in row
     )
-    
-    return contains_only_alpha or contains_keywords
+    return contains_keywords
 
 def load_data(csv_file, has_header=False):
     """Загружает данные из CSV файла в базу данных"""
@@ -53,88 +48,143 @@ def load_data(csv_file, has_header=False):
         logger.error("❌ Ошибка подключения к базе данных")
         return False
 
+    # Кэши для избежания дублирования
+    groups_cache = {}
+    std_questions_cache = {}
+    answers_cache = {}
+    variants_cache = {}  # Кэш для отслеживания обработанных вариантов
+    
     row_count = 0
-    inserted_count = 0
+    inserted_groups = 0
+    inserted_std_questions = 0
+    inserted_answers = 0
+    inserted_variants = 0
     skipped_count = 0
-    actual_header = None
     
     try:
         with open(csv_file, 'r', encoding='utf-8') as file:
-            # Создаем CSV reader
             reader = csv.reader(file, delimiter=',', quotechar='"')
             
-            # Читаем первую строку для анализа
+            # Определение заголовка
             first_row = next(reader, None)
             if first_row is None:
                 logger.error("❌ Файл CSV пуст")
                 return False
                 
-            # Автоматически определяем, является ли первая строка заголовком
             auto_detected_header = is_header_row(first_row)
             
-            # Если пользователь явно указал или автоматическое определение показало заголовок
             if has_header or auto_detected_header:
                 actual_header = first_row
                 logger.info(f"🔖 Обнаружен заголовок: {actual_header}")
             else:
-                # Возвращаемся к началу файла
                 file.seek(0)
                 logger.info("ℹ️ Заголовок не обнаружен, первая строка считается данными")
             
-            # Читаем оставшиеся строки
             for row in reader:
                 row_count += 1
                 
-                if len(row) < 3:
-                    logger.warning(f"⚠️ Строка {row_count}: не хватает данных - пропускаем")
+                # Проверка минимального количества полей
+                if len(row) < 5:
+                    logger.warning(f"⚠️ Строка {row_count}: не хватает данных (требуется 5 полей) - пропускаем")
                     skipped_count += 1
                     continue
                     
-                intent = row[0].strip().replace('\xa0', ' ')  # Заменяем неразрывные пробелы
-                question = row[1].strip().replace('\xa0', ' ')
-                answer = row[2].strip().replace('\xa0', ' ')
+                # Обработка полей
+                group_name = normalize_field(row[0])
+                std_question = normalize_field(row[1])
+                intent = normalize_field(row[2])
+                variant_text = normalize_field(row[3])
+                answer_text = normalize_field(row[4])
                 
-                if not question or not answer:
-                    logger.warning(f"⚠️ Строка {row_count}: пустой вопрос или ответ - пропускаем")
+                # Проверка обязательных полей
+                if not group_name or not std_question or not answer_text:
+                    logger.warning(f"⚠️ Строка {row_count}: пустое обязательное поле - пропускаем")
                     skipped_count += 1
                     continue
                 
                 try:
-                    # Проверяем существование вопроса
-                    if db.question_exists(question):
-                        logger.info(f"⏩ Строка {row_count}: вопрос уже существует - '{question}'")
-                        skipped_count += 1
-                        continue
+                    # 1. Обработка группы вопросов
+                    if group_name not in groups_cache:
+                        group_id = db.get_or_create_group(group_name)
+                        if group_id:
+                            groups_cache[group_name] = group_id
+                            inserted_groups += 1
+                            logger.info(f"➕ Группа добавлена: {group_name}")
+                        else:
+                            raise Exception(f"Ошибка добавления группы: {group_name}")
+                    else:
+                        group_id = groups_cache[group_name]
                     
-                    # Нормализуем вопрос
-                    normalized_question = embedder.normalize_text(question)
+                    # 2. Обработка ответа
+                    if answer_text not in answers_cache:
+                        answer_id = db.insert_answer(answer_text)
+                        if answer_id:
+                            answers_cache[answer_text] = answer_id
+                            inserted_answers += 1
+                            logger.info(f"➕ Ответ добавлен: {answer_text[:50]}...")
+                        else:
+                            raise Exception(f"Ошибка добавления ответа")
+                    else:
+                        answer_id = answers_cache[answer_text]
                     
-                    # Рассчитываем эмбеддинг
-                    embedding = embedder.get_embedding(normalized_question)
-                    blob = array_to_blob(embedding)
+                    # 3. Обработка стандартного вопроса
+                    cache_key = f"{group_id}_{std_question}"
+                    if cache_key not in std_questions_cache:
+                        std_question_id = db.insert_standard_question(
+                            title=std_question,
+                            group_id=group_id,
+                            answer_id=answer_id,
+                            intent=intent
+                        )
+                        if std_question_id:
+                            std_questions_cache[cache_key] = std_question_id
+                            inserted_std_questions += 1
+                            logger.info(f"➕ Стандартный вопрос добавлен: {std_question}")
+                        else:
+                            raise Exception(f"Ошибка добавления стандартного вопроса")
+                    else:
+                        std_question_id = std_questions_cache[cache_key]
                     
-                    # Добавляем ответ и получаем его ID
-                    answer_id = db.insert_answer(answer)
-                    if not answer_id:
-                        raise Exception("Не удалось добавить ответ")
-                    
-                    # Добавляем вопрос
-                    if not db.insert_question(question, answer_id, blob, intent):
-                        raise Exception("Не удалось добавить вопрос")
-                    
-                    inserted_count += 1
-                    logger.info(f"✅ Строка {row_count}: добавлен вопрос - '{question}'")
+                    # 4. Обработка варианта вопроса (если указан)
+                    if variant_text:
+                        # Проверяем, не обрабатывали ли уже этот вариант
+                        variant_cache_key = f"{std_question_id}_{variant_text}"
+                        if variant_cache_key in variants_cache:
+                            logger.info(f"⏩ Вариант уже обработан: '{variant_text}'")
+                            continue
+                            
+                        variants_cache[variant_cache_key] = True
+                        
+                        # Нормализация и эмбеддинг
+                        normalized_text = embedder.normalize_text(variant_text)
+                        embedding = embedder.get_embedding(normalized_text)
+                        blob = array_to_blob(embedding)
+                        
+                        # Вставка варианта
+                        if db.insert_question_variant(
+                            variant_text=variant_text,
+                            embedding=blob,
+                            std_question_id=std_question_id
+                        ):
+                            inserted_variants += 1
+                            logger.info(f"✅ Вариант добавлен: '{variant_text}'")
+                        else:
+                            logger.warning(f"⚠️ Вариант не добавлен (дубликат): '{variant_text}'")
                     
                 except Exception as e:
                     logger.error(f"❌ Ошибка при обработке строки {row_count}: {str(e)}")
+                    logger.debug(traceback.format_exc())
                     skipped_count += 1
                     continue
                 
-        logger.info(f"\n📊 Итоги по файлу {csv_file}:")
+        logger.info(f"\n📊 Итоги загрузки {csv_file}:")
         logger.info(f"  Всего строк: {row_count}")
-        logger.info(f"  Успешно добавлено: {inserted_count}")
-        logger.info(f"  Пропущено: {skipped_count}")
-        return inserted_count > 0
+        logger.info(f"  Добавлено групп: {inserted_groups}")
+        logger.info(f"  Добавлено ответов: {inserted_answers}")
+        logger.info(f"  Добавлено стандартных вопросов: {inserted_std_questions}")
+        logger.info(f"  Добавлено вариантов: {inserted_variants}")
+        logger.info(f"  Пропущено строк: {skipped_count}")
+        return True
             
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {str(e)}")

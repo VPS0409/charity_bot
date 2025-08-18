@@ -1,12 +1,21 @@
 # Файл utils.py
-# utils.py
 import numpy as np
-import pickle
+import logging
 
-def array_to_blob(arr: np.ndarray) -> bytes:
-    """Преобразует массив numpy в бинарный объект для хранения в БД"""
-    return pickle.dumps(arr, protocol=pickle.HIGHEST_PROTOCOL)
+logger = logging.getLogger(__name__)
 
-def blob_to_array(blob: bytes) -> np.ndarray:
-    """Преобразует бинарный объект из БД в массив numpy"""
-    return pickle.loads(blob)
+def array_to_blob(array):
+    """Конвертирует numpy array в бинарный формат для БД"""
+    try:
+        return array.tobytes()
+    except Exception as e:
+        logger.error(f"Ошибка конвертации массива в BLOB: {str(e)}")
+        return None
+
+def blob_to_array(blob):
+    """Конвертирует бинарные данные из БД в numpy array"""
+    try:
+        return np.frombuffer(blob, dtype=np.float32)
+    except Exception as e:
+        logger.error(f"Ошибка конвертации BLOB в массив: {str(e)}")
+        return None
