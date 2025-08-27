@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 def normalize_field(value):
     """Нормализация и очистка полей"""
-    return value.strip().replace('\xa0', ' ').replace('"', '').replace("'", "")
+    if value is None:
+        return ""
+    return str(value).strip().replace('\xa0', ' ').replace('"', '').replace("'", "")
 
 def is_header_row(row):
     """Определяет, является ли строка заголовком"""
@@ -34,7 +36,7 @@ def is_header_row(row):
         'intent', 'question_variants', 'answers'
     ]
     contains_keywords = any(
-        any(keyword in field.lower() for keyword in header_keywords)
+        any(keyword in str(field).lower() for keyword in header_keywords)
         for field in row
     )
     return contains_keywords
@@ -44,10 +46,6 @@ def load_data(csv_file, has_header=False):
     db = Database(config.DB_HOST, config.DB_USER, config.DB_PASSWORD, config.DB_NAME)
     embedder = EmbeddingModel(config.MODEL_PATH)
     
-    if not db.connect():
-        logger.error("❌ Ошибка подключения к базе данных")
-        return False
-
     # Кэши для избежания дублирования
     groups_cache = {}
     std_questions_cache = {}
@@ -105,50 +103,88 @@ def load_data(csv_file, has_header=False):
                 try:
                     # 1. Обработка группы вопросов
                     if group_name not in groups_cache:
-                        group_id = db.get_or_create_group(group_name)
-                        if group_id:
-                            groups_cache[group_name] = group_id
-                            inserted_groups += 1
-                            logger.info(f"➕ Группа добавлена: {group_name}")
-                        else:
-                            raise Exception(f"Ошибка добавления группы: {group_name}")
+                        # Получаем или создаем группу
+                        groups = db.get_question_groups()
+                        group_id = None
+                        
+                        # Ищем существующую группу
+                        for group in groups:
+                            if group['name'] == group_name:
+                                group_id = group['id']
+                                break
+                        
+                        # Если группа не найдена, создаем новую
+                        if group_id is None:
+                            group_id = db.insert_group(group_name)
+                            if not group_id:
+                                logger.warning(f"⚠️ Не удалось создать группу: {group_name}")
+                                skipped_count += 1
+                                continue
+                                
+                        groups_cache[group_name] = group_id
+                        inserted_groups += 1
+                        logger.info(f"➕ Группа найдена/добавлена: {group_name}")
                     else:
                         group_id = groups_cache[group_name]
                     
                     # 2. Обработка ответа
                     if answer_text not in answers_cache:
-                        answer_id = db.insert_answer(answer_text)
-                        if answer_id:
-                            answers_cache[answer_text] = answer_id
-                            inserted_answers += 1
-                            logger.info(f"➕ Ответ добавлен: {answer_text[:50]}...")
-                        else:
-                            raise Exception(f"Ошибка добавления ответа")
+                        # Получаем все ответы
+                        answers = db.get_all_answers()
+                        answer_id = None
+                        
+                        # Ищем существующий ответ
+                        for answer in answers:
+                            if answer['text'] == answer_text:
+                                answer_id = answer['id']
+                                break
+                        
+                        # Если ответ не найден, создаем новый
+                        if answer_id is None:
+                            answer_id = db.insert_answer(answer_text)
+                            if not answer_id:
+                                logger.warning(f"⚠️ Не удалось создать ответ: {answer_text[:50]}...")
+                                skipped_count += 1
+                                continue
+                                
+                        answers_cache[answer_text] = answer_id
+                        inserted_answers += 1
+                        logger.info(f"➕ Ответ найден/добавлен: {answer_text[:50]}...")
                     else:
                         answer_id = answers_cache[answer_text]
                     
                     # 3. Обработка стандартного вопроса
                     cache_key = f"{group_id}_{std_question}"
                     if cache_key not in std_questions_cache:
-                        std_question_id = db.insert_standard_question(
-                            title=std_question,
-                            group_id=group_id,
-                            answer_id=answer_id,
-                            intent=intent
-                        )
-                        if std_question_id:
-                            std_questions_cache[cache_key] = std_question_id
-                            inserted_std_questions += 1
-                            logger.info(f"➕ Стандартный вопрос добавлен: {std_question}")
-                        else:
-                            raise Exception(f"Ошибка добавления стандартного вопроса")
+                        # Получаем все стандартные вопросы
+                        questions = db.get_all_standard_questions()
+                        standard_question_id = None
+                        
+                        # Ищем существующий вопрос
+                        for question in questions:
+                            if (question['group_id'] == group_id and 
+                                question['title'] == std_question):
+                                standard_question_id = question['id']
+                                break
+                        
+                        # Если вопрос не найден, создаем новый
+                        if standard_question_id is None:
+                            standard_question_id = db.insert_standard_question(std_question, group_id, answer_id, intent)
+                            if not standard_question_id:
+                                logger.warning(f"⚠️ Не удалось создать стандартный вопрос: {std_question}")
+                                skipped_count += 1
+                                continue
+                                
+                        std_questions_cache[cache_key] = standard_question_id
+                        inserted_std_questions += 1
+                        logger.info(f"➕ Стандартный вопрос найден/добавлен: {std_question}")
                     else:
-                        std_question_id = std_questions_cache[cache_key]
+                        standard_question_id = std_questions_cache[cache_key]
                     
                     # 4. Обработка варианта вопроса (если указан)
                     if variant_text:
                         # Проверяем, не обрабатывали ли уже этот вариант
-                        variant_cache_key = f"{std_question_id}_{variant_text}"
+                        variant_cache_key = f"{standard_question_id}_{variant_text}"
                         if variant_cache_key in variants_cache:
                             logger.info(f"⏩ Вариант уже обработан: '{variant_text}'")
                             continue
@@ -161,15 +197,15 @@ def load_data(csv_file, has_header=False):
                         blob = array_to_blob(embedding)
                         
                         # Вставка варианта
-                        if db.insert_question_variant(
-                            variant_text=variant_text,
-                            embedding=blob,
-                            std_question_id=std_question_id
-                        ):
-                            inserted_variants += 1
-                            logger.info(f"✅ Вариант добавлен: '{variant_text}'")
-                        else:
-                            logger.warning(f"⚠️ Вариант не добавлен (дубликат): '{variant_text}'")
+                        try:
+                            success = db.insert_question_variant(variant_text, blob, standard_question_id)
+                            if success:
+                                inserted_variants += 1
+                                logger.info(f"✅ Вариант добавлен: '{variant_text}'")
+                            else:
+                                logger.warning(f"⚠️ Вариант не добавлен (дубликат): '{variant_text}'")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Ошибка при добавлении варианта '{variant_text}': {str(e)}")
                     
                 except Exception as e:
                     logger.error(f"❌ Ошибка при обработке строки {row_count}: {str(e)}")
@@ -190,8 +226,6 @@ def load_data(csv_file, has_header=False):
         logger.error(f"❌ Критическая ошибка: {str(e)}")
         logger.error(traceback.format_exc())
         return False
-    finally:
-        db.disconnect()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Загрузка данных из CSV в БД')

@@ -1,4 +1,4 @@
-# файл add_question.py
+# файл scripts/add_question.py
 
 import argparse
 import logging
